@@ -3,7 +3,7 @@
 - Model:
     - D_i ~ Negative-Binomial(µ_i, θ)
     - µ_i = exp(b0 + s(lat_i, lon_i) + log(expected_i))
-    - θ_i = exp(b1)
+    - θ = exp(b1)
     - expected_i is derived from Ukrainian average age and sex specific incidence rates 2001
 - test for spatial autocorrelation via Moran's I on scaled model residuals
     - pvalue female: 0.401, i.e. no evidence for residual autocorrelation
@@ -14,7 +14,7 @@
 - Model:
     - D_i ~ Negative-Binomial(µ_i, θ)
     - µ_i = exp(b0 + s(lat_i, lon_i) + b1*log2(dos) + log(expected_i))
-    - θ_i = exp(b2)
+    - θ = exp(b2)
     - expected_i is derived from Ukrainian average age and sex specific incidence rates 2001
     - exp(b2) is the factor by which a doubling of dosage changes SIR
 - effect of dosage on SIR:
