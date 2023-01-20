@@ -1,0 +1,77 @@
+# Smoothed SIRs of regional thyroid cancer 2001 by sex
+
+- Model:
+    - D_i ~ Negative-Binomial(µ_i, θ)
+    - µ_i = exp(b0 + s(lat_i, lon_i) + log(expected_i))
+    - θ_i = exp(b1)
+    - expected_i is derived from Ukrainian average age and sex specific incidence rates 2001
+- test for spatial autocorrelation via Moran's I on scaled model residuals
+    - pvalue female: 0.401, i.e. no evidence for residual autocorrelation
+    - pvalue male: 0.765, i.e. no evidence for residual autocorrelation
+
+# Spatial regression model of dosage effect on SIR
+
+- Model:
+    - D_i ~ Negative-Binomial(µ_i, θ)
+    - µ_i = exp(b0 + s(lat_i, lon_i) + b1*log2(dos) + log(expected_i))
+    - θ_i = exp(b2)
+    - expected_i is derived from Ukrainian average age and sex specific incidence rates 2001
+    - exp(b2) is the factor by which a doubling of dosage changes SIR
+- effect of dosage on SIR:
+    female: exp(b2) = 1.116***, i.e. a doubling of dosage is associated with an increase of SIR by a factor of 1.116.
+    male:   exp(b2) = 1.338***, i.e. a doubling of dosage is associated with an increase of SIR by a factor of 1.338.
+- test for spatial autocorrelation via Moran's I on scaled model residuals
+    - pvalue female: 0.372, i.e. no evidence for residual autocorrelation
+    - pvalue male: 0.292, i.e. no evidence for residual autocorrelation
+
+Regression table female:
+
+> Family: Negative Binomial(11.791)
+> Link function: log
+>
+> Formula:
+> observed ~ s(Y, X, bs = "tp") + log2(dos) + offset(log(expected))
+>
+> Parametric coefficients:
+>             Estimate Std. Error z value Pr(>|z|)
+> (Intercept) -0.78637    0.30208  -2.603  0.00924 **
+> log2(dos)    0.11032    0.05729   1.926  0.05416 .
+> ---
+> Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+>
+> Approximate significance of smooth terms:
+>          edf Ref.df Chi.sq p-value
+> s(Y,X) 22.16  26.37    166  <2e-16 ***
+> ---
+> Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+>
+> R-sq.(adj) =  0.956   Deviance explained = 31.4%
+> -REML =   1027  Scale est. = 1         n = 625
+
+Regression table male:
+
+> Family: Negative Binomial(3.698)
+> Link function: log
+>
+> Formula:
+> observed ~ s(Y, X, bs = "tp") + log2(dos) + offset(log(expected))
+>
+> Parametric coefficients:
+>             Estimate Std. Error z value Pr(>|z|)
+> (Intercept) -1.68733    0.47060  -3.586 0.000336 ***
+> log2(dos)    0.29175    0.08583   3.399 0.000676 ***
+> ---
+> Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+>
+> Approximate significance of smooth terms:
+>          edf Ref.df Chi.sq p-value
+> s(Y,X) 6.502  9.052  12.79   0.173
+>
+> R-sq.(adj) =  0.749   Deviance explained = 9.05%
+> -REML = 516.94  Scale est. = 1         n = 625
+
+# Linear regression of log2(dosage) on smoothed SIR
+
+- effect of dosage on SIR:
+    - female: 0.2523 (95% 0.2206, 0.2840), i.e. doubling of dosage is associated with an increase in smoothed SIR by 25 percentage points
+    - male: 0.2 (95% 0.1682, 0.2318), i.e. doubling of dosage is associated with an increase in smoothed SIR by 20 percentage points
