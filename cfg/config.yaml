@@ -1,2 +1,8 @@
 figspec:
   width: 170
+  district_outline_width: 0.2
+  national_outline_width: 0.4
+  cities_point_size: 2
+  cities_text_size: 4
+  na_color: '#999999'
+quantiles: {lo: 0.025, hi: 0.975}

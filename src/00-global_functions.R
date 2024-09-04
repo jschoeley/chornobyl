@@ -3,10 +3,10 @@
 # Plotting --------------------------------------------------------
 
 # fonts
-library(showtext)
-font_add_google('Roboto', 'roboto')
-font_add_google('Roboto Condensed', 'robotocondensed')
-showtext_auto()
+# library(showtext)
+# font_add_google('Roboto', 'roboto')
+# font_add_google('Roboto Condensed', 'robotocondensed')
+# showtext_auto()
 
 # ggplot theme by Jonas Schöley
 MyGGplotTheme <-
@@ -162,14 +162,3 @@ ExportFigure <-
     
     do.call(ggsave, arguments)
   }
-
-# Estimation ------------------------------------------------------
-
-# Confidence intervals around crude standardized incidence rate
-# based on delta method
-SIRCI <- function(observed, expected, quant = 0.025) {
-  Q <- qnorm(quant)
-  EF <- exp(Q/sqrt(observed))
-  CI <- observed/expected*EF
-  CI <- ifelse(observed==0|expected==0, NA, CI)
-}

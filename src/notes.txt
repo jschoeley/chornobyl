@@ -75,3 +75,40 @@ Regression table male:
 - effect of dosage on SIR:
     - female: 0.2523 (95% 0.2206, 0.2840), i.e. doubling of dosage is associated with an increase in smoothed SIR by 25 percentage points
     - male: 0.2 (95% 0.1682, 0.2318), i.e. doubling of dosage is associated with an increase in smoothed SIR by 20 percentage points
+
+# NB 2: Negative binomial regression of dosage on thyroid cancer incidence (no spatial autocorrelation)
+
+- Model:
+    - D_i ~ Negative-Binomial(µ_i, θ)
+    - µ_i = exp(b0 + b1*sex_i + b2*age_i + b3*dosageGy_i + b4*dosage_Gy*sex_i + log(population_i))
+          = exp(b0 + b1*sex_i + b2*age_i)_baseline * exp(b3*dosageGy_i + b4*dosage_Gy*sex_i)_excess * population_i
+    - θ = exp(b1)
+    - population_i is the sex and age specific population numbers of a district
+    - D_i is the sex and age specific tyroid cancer count of a district
+- effect of dosage on thyroid cancer incidence (Exposure risk ratio)
+  - relative increase in thyroid cancer incidence per additional Gy of dosage exposure
+  - male: 5.00 [95% CI 2.76, 9.02]
+  - female: 4.32 [95% CI 2.58, 6.82]
+- test for zero inflation
+    - observed to expected 0s: 1.006, p = 0.02, i.e. slight evidence for zero inflation, but not substantial
+- test for spatial autocorrelation via Moran's I on scaled model residuals
+    - Morans I: 0.055, pvalue: <0.001, i.e. strong evidence for moderate residual spatial autocorrelation
+
+# NB-CAR 2: Negative binomial regression of dosage on thyroid cancer incidence (CAR)
+
+- Model:
+    - D_i ~ Negative-Binomial(µ_i, θ)
+    - µ_i = exp(b0 + b1*sex_i + b2*age_i + b3*dosageGy_i + b4*dosage_Gy*sex_i + z_k[i] + log(population_i))
+          = exp(b0 + z_k[i] + b1*sex_i + b2*age_i)_baseline * exp(b3*dosageGy_i + b4*dosage_Gy*sex_i)_excess * population_i
+    - θ = exp(b1)
+    - population_i is the sex and age specific population numbers of a district
+    - D_i is the sex and age specific tyroid cancer count of a district
+    - z_k[i] is the spatial effect for each district k belonging to observation i
+- effect of dosage on thyroid cancer incidence (Exposure risk ratio)
+  - relative increase in thyroid cancer incidence per additional Gy of dosage exposure
+  - male: 2.31 [95% CI 1.15, 4.91]
+  - female: 1.43 [95% CI 0.68, 2.83]
+- test for zero inflation
+    - observed to expected 0s: 1.004, p = 0.14, i.e. no evidence for zero inflation
+- test for spatial autocorrelation via Moran's I on scaled model residuals
+    - Morans I: -0.006, pvalue: 0.20, i.e. no evidence for residual spatial autocorrelation
