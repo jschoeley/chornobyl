@@ -21,4 +21,4 @@ Nataliia Levchuk, Jonas Schöley, Laura Ann Cilek, Domantas Jasilionis
         -   `Part12_NL.R`: Step bar plot for unsmoothed SIRs at the age 15+ in 2001 by six population percentiles.
         -   `Part14_NL.R`: Calculating Ukraine’s population weights and standardized incidence rates at the age 15+.
 
-![](README_files/teaser.png)
+![](ass/teaser.png)
