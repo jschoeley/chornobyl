@@ -10,7 +10,7 @@ Nataliia Levchuk, Jonas Schöley, Laura Ann Cilek, Domantas Jasilionis
     -   `11-model_input.R`: Prepare Ukrainian data on regional thyroid cancer incidence and radiation exposure for modeling.
     -   `20-model_crudesir.R`: Calculate crude regional SIR of thyroid cancer incidence across Ukraine.
     -   `21-model_smoothsir.R`: Calculate smooth regional SIR of thyroid cancer incidence across Ukraine.
-    -   `22-model_dosage.R`: Estimate exposure rate ratio of absorbed dosage.
+    -   `22-model_dosage.R`: Estimate excess risk ratio of absorbed dosage.
     -   `install_dependencies.R`: Install required packages.
     -   `NL`: Preparation of dosage and population data and additional analyses by Nataliia Levchuk and Laura Ann Cilek.
         -   `Part6_NL.R`: Spatial interpolation of settlement dosage data to get district mean doses and plus interpolation of population weighted doses at the age 15-19.
