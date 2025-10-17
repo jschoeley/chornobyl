@@ -5,8 +5,10 @@
 library(yaml)
 library(tidyverse)
 library(sf)
+library(spdep)
 library(DHARMa)
 library(INLA)
+library(inlabru)
 
 # Constants -------------------------------------------------------
 
@@ -22,10 +24,10 @@ paths$input <- list(
 )
 paths$output <- list(
   dosage_rds = 'out/22-dosage.rds',
-  car1_rds = 'out/22-car1.rds',
-  car2_rds = 'out/22-car2.rds',
-  nb1_rds = 'out/22-nb1.rds',
-  nb2_rds = 'out/22-nb2.rds',
+  nb_rds = 'out/22-nb.rds',
+  nbcar_rds = 'out/22-nbcar.rds',
+  nbcar_errpergybyagesex_csv = 'out/22-errpergybyagesex.csv',
+  nbcar_errpergybyage_csv = 'out/22-errpergybyage.csv',
   out = 'out/'
 )
 
@@ -33,7 +35,7 @@ paths$output <- list(
 config <- read_yaml(paths$input$config)
 
 cnst <- list(
-  nsim = 500,
+  nsim = 10000,
   incidencescaler = 1e6,
   cilo = 0.025,
   cihi = 0.975
@@ -222,484 +224,203 @@ rrage$data |>
     title = 'Risk ratio of thyroid cancer incidence over age vs. age 25'
   )
 
-# CAR -------------------------------------------------------------
+# Spatial regression data -----------------------------------------
 
-car <- list()
+spatialdat <- list()
 
 # prepare data
-car$data <-
+spatialdat$data <-
   dat$modelinput$region_sex_age |>
   filter(sex != 'total') |>
   mutate(
-    ageminus25 = age - 25,
+    ageatexposure = age - 15,
+    ageatexposuresq = ageatexposure^2,
+    sqrtageatexposure = sqrt(age - 15),
+    log1pageatexposure = log1p(ageatexposure),
+    ageatexposurefac = cut(
+      ageatexposure, breaks = c(
+        0, 5, 10, 20, Inf
+      ), right = FALSE, labels = c(
+        '0-4', '5-9', '10-19', '20+'
+      ),
+      ageatexposurefac2 = as.factor(data$ageatexposure)
+    ),
     sex = factor(sex, levels = c('male', 'female')),
+    sexsumto0 = case_when(sex == 'male' ~ -0.5, sex == 'female' ~ 0.5),
     dosGy = dose/1000,
+    logdosGy = sqrt(dose/1000),
+    dosGysq = dosGy^2,
     superregion_id = as.factor(substr(region_id, 1, 2)),
-    # for INLAs CAR model (graph) factors in increasing interger order
+    # for INLAs CAR model (graph) factors in increasing integer order
+    region_id_orig = region_id,
     region_id = as.integer(as.factor(region_id))
   ) |>
-  arrange(age, ageminus25, sex,
+  arrange(age, ageatexposure, sex,
           superregion_id,
           region_id)
 
 # get neighborhood matrix
-car$W <- st_touches(
-  filter(dat$maptemplates$ukrgeo,
-         region_id %in% dat$locations$region_id),
-  sparse = FALSE
+spatialdat$nb <- poly2nb(
+  filter(dat$maptemplates$ukrgeo, region_id %in% dat$locations$region_id),
+  queen = TRUE,
+  snap = 1e-4 # 10 meters
 )
-#image(car$W)
-diag(car$W) <- FALSE
+spatialdat$W <- listw2mat(nb2listw(spatialdat$nb, style = 'B', zero.policy = TRUE))
 
-# NB-CAR1 (overall) -----------------------------------------------
-
-car1 <- within(list(), {
-  
-  # dimensions
-  d <- list(nsim = cnst$nsim, ndat = nrow(car$data))
-  
-  # fit nb-CAR model
-  fit <- inla(
-    incidence_2001 ~
-      1 + sex +
-      poly(ageminus25, 2, raw = TRUE) +
-      sex:poly(ageminus25, 2, raw = TRUE) +
-      dosGy +
-      #superregion_id +
-      f(region_id, model = 'besag', graph = car$W) +
-      offset(log(population_2001)),
-    data = car$data,
-    family = 'nbinomial',
-    control.predictor = list(compute = TRUE),
-    control.compute = list(dic = TRUE, waic = TRUE, config = TRUE)
-  )
-  summary(fit)
-  
-  # extract simulations of model parameters
-  posterior_samples <- inla.posterior.sample(cnst$nsim, result = fit)
-  theta <- within(list(), {
-    # beta's
-    b_intercept =
-      inla.posterior.sample.eval(c('Intercept'), posterior_samples)
-    b_female =
-      inla.posterior.sample.eval(c('sexfemale'), posterior_samples)
-    b_dosgy =
-      inla.posterior.sample.eval(c('dosGy'), posterior_samples)
-    b_age1 =
-      inla.posterior.sample.eval(c('1'), posterior_samples)
-    b_age2 =
-      inla.posterior.sample.eval(c('2'), posterior_samples)
-    b_femaleage1 =
-      inla.posterior.sample.eval(c('sexfemale:1'), posterior_samples)
-    b_femaleage2 =
-      inla.posterior.sample.eval(c('sexfemale:2'), posterior_samples)
-    # predicted mean response
-    nb_mu =
-      exp(inla.posterior.sample.eval(c('Predictor'), posterior_samples))
-    # negative binominal parameters
-    nb_size =
-      fit$summary.hyperpar$mean[1]
-    nb_var =
-      nb_mu + nb_mu^2/nb_size
-    nb_overdispersion =
-      1/nb_size
-    nb_p =
-      nb_mu/nb_var
-    nb_r =
-      (nb_mu^2)/(nb_var-nb_mu)
-  })
-  
-  # residual diagnostics
-  # simulated count responses
-  simulated_counts <- matrix(NA, nrow = d$ndat, ncol = d$nsim)
-  for (i in 1:d$ndat) {
-    simulated_counts[i,] <-
-      rnbinom(d$nsim, size = theta$nb_r[i,], prob = theta$nb_p[i,])
-  }
-  # residual object
-  dharm <- createDHARMa(
-    simulated_counts, car$data$incidence_2001,
-    fittedPredictedResponse = NULL, integerResponse = TRUE
-  )
-  # aggregate residuals to regions
-  dharm_agg <- recalculateResiduals(dharm, group = car$data$region_id)
-  residual_tests <- list(
-    test_dispersion = testDispersion(dharm),
-    test_zeroinflation = testZeroInflation(dharm),
-    test_spatialautocor =
-      testSpatialAutocorrelation(dharm_agg, dat$locations$X, dat$locations$Y)
-  )
-  
-  # statistics of interest
-  statistics_overall <-
-    expand_grid(draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_intercept = theta$b_intercept,
-      b_female = theta$b_female,
-      b_age1 = theta$b_age1,
-      b_age2 = theta$b_age2,
-      b_femaleage1 = theta$b_femaleage1,
-      b_femaleage2 = theta$b_femaleage2,
-      b_dosgy_m = theta$b_dosgy
-    ) |>
-    mutate(
-      intercept_m = b_intercept,
-      intercept_f = b_intercept+b_female,
-      # annual thyroid cancer incidence per million @ 0 dosage age 25
-      baselineincidence_m = exp(intercept_m)*cnst$incidencescaler,
-      baselineincidence_f = exp(intercept_f)*cnst$incidencescaler,
-      # rate ratio of female to male baseline incidence
-      baselineincidence_femalefactor = exp(b_female),
-      # relative increase in thyroid cancer incidence for
-      # 1 Gy increase in dosage
-      exposureriskratio = exp(b_dosgy_m)
-    ) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('intercept', 'baselineincidence', 'exposureriskratio', 'b_')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  # summarise statistics of interest
-  statistics_by_dosage <-
-    # evalutate parameters over levels of dosage
-    expand_grid(dosgy = 0:5, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_dosgy_m = rep(theta$b_dosgy, 6),
-      b_female_dosgy = rep(theta$b_female_dosgy, 6)
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer @ dosage compared to 0 dosage
-      dosageriskratio = exp(b_dosgy_m*dosgy)
-    ) |>
-    group_by(dosgy) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('dosageriskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  statistics_by_age <-
-    # evalutate parameters over age
-    expand_grid(age = 15:85, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_age1 = rep(theta$b_age1, 71),
-      b_age2 = rep(theta$b_age2, 71),
-      b_femaleage1 = rep(theta$b_femaleage1, 71),
-      b_femaleage2 = rep(theta$b_femaleage2, 71),
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer incidence over age
-      riskratio_m = exp(b_age1*(age-25) + b_age2*(age-25)^2),
-      riskratio_f = exp((b_age1+b_femaleage1)*(age-25) +
-                          (b_age2+b_femaleage2)*(age-25)^2)
-    ) |>
-    group_by(age) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('riskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-})
-
-summary(car1$fit)
-car1$statistics_overall |> t()
-car1$statistics_by_age
-car1$statistics_by_dosage
-car1$theta$nb_overdispersion
-car1$residual_tests
-
-car1$statistics_by_age |>
-  ggplot() +
-  aes(x = age) +
-  geom_ribbon(aes(ymin = riskratio_m_qlo, ymax = riskratio_m_qhi),
-              fill = 'blue', alpha = 0.1) +
-  geom_line(aes(y = riskratio_m_avg), color = 'blue') +
-  geom_ribbon(aes(ymin = riskratio_f_qlo, ymax = riskratio_f_qhi),
-              fill = 'red', alpha = 0.1) +
-  geom_line(aes(y = riskratio_f_avg), color = 'red')
-
-# NB-CAR2 (by sex) ------------------------------------------------
-
-car2 <- within(list(), {
-  
-  # dimensions
-  d <- list(nsim = cnst$nsim, ndat = nrow(car$data))
-  
-  # fit nb-CAR model
-  fit <- inla(
-    incidence_2001 ~
-      1 + sex +
-      poly(ageminus25, 2, raw = TRUE) +
-      sex:poly(ageminus25, 2, raw = TRUE) +
-      dosGy + sex:dosGy +
-      f(region_id, model = 'besag', graph = car$W) +
-      offset(log(population_2001)),
-    data = car$data,
-    family = 'nbinomial',
-    control.predictor = list(compute = TRUE),
-    control.compute = list(dic = TRUE, waic = TRUE, config = TRUE)
-  )
-  summary(fit)
-  
-  # extract simulations of model parameters
-  posterior_samples <- inla.posterior.sample(cnst$nsim, result = fit)
-  theta <- within(list(), {
-    # beta's
-    b_intercept =
-      inla.posterior.sample.eval(c('Intercept'), posterior_samples)
-    b_female =
-      inla.posterior.sample.eval(c('sexfemale'), posterior_samples)
-    b_dosgy =
-      inla.posterior.sample.eval(c('dosGy'), posterior_samples)
-    b_female_dosgy =
-      inla.posterior.sample.eval(c('sexfemale:dosGy'), posterior_samples)
-    b_age1 =
-      inla.posterior.sample.eval(c('1'), posterior_samples)
-    b_age2 =
-      inla.posterior.sample.eval(c('2'), posterior_samples)
-    b_femaleage1 =
-      inla.posterior.sample.eval(c('sexfemale:1'), posterior_samples)
-    b_femaleage2 =
-      inla.posterior.sample.eval(c('sexfemale:2'), posterior_samples)
-    # predicted mean response
-    nb_mu =
-      exp(inla.posterior.sample.eval(c('Predictor'), posterior_samples))
-    # negative binominal parameters
-    nb_size =
-      fit$summary.hyperpar$mean[1]
-    nb_var =
-      nb_mu + nb_mu^2/nb_size
-    nb_overdispersion =
-      1/nb_size
-    nb_p =
-      nb_mu/nb_var
-    nb_r =
-      (nb_mu^2)/(nb_var-nb_mu)
-  })
-  
-  # residual diagnostics
-  # simulated count responses
-  simulated_counts <- matrix(NA, nrow = d$ndat, ncol = d$nsim)
-  for (i in 1:d$ndat) {
-    simulated_counts[i,] <-
-      rnbinom(d$nsim, size = theta$nb_r[i,], prob = theta$nb_p[i,])
-  }
-  # residual object
-  dharm <- createDHARMa(
-    simulated_counts, car$data$incidence_2001,
-    fittedPredictedResponse = NULL, integerResponse = TRUE
-  )
-  # aggregate residuals to regions
-  dharm_agg <- recalculateResiduals(dharm, group = car$data$region_id)
-  residual_tests <- list(
-    test_dispersion = testDispersion(dharm),
-    test_zeroinflation = testZeroInflation(dharm),
-    test_spatialautocor =
-      testSpatialAutocorrelation(dharm_agg, dat$locations$X, dat$locations$Y)
-  )
-  
-  # statistics of interest
-  statistics_overall <-
-    expand_grid(draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_intercept = theta$b_intercept,
-      b_female = theta$b_female,
-      b_age1 = theta$b_age1,
-      b_age2 = theta$b_age2,
-      b_femaleage1 = theta$b_femaleage1,
-      b_femaleage2 = theta$b_femaleage2,
-      b_dosgy_m = theta$b_dosgy,
-      b_female_dosgy = theta$b_female_dosgy
-    ) |>
-    mutate(
-      intercept_m = b_intercept,
-      intercept_f = b_intercept+b_female,
-      # annual thyroid cancer incidence per million @ 0 dosage age 25
-      baselineincidence_m = exp(intercept_m)*cnst$incidencescaler,
-      baselineincidence_f = exp(intercept_f)*cnst$incidencescaler,
-      # rate ratio of female to male baseline incidence
-      baselineincidence_femalefactor = exp(b_female),
-      # relative increase in thyroid cancer incidence for
-      # 1 Gy increase in dosage
-      exposureriskratio_m = exp(b_dosgy_m),
-      exposureriskratio_f = exp(b_dosgy_m+b_female_dosgy),
-      # rate ratio of female to male exposure risk ratio
-      exposureriskratio_femalefactor = exp(b_female_dosgy),
-    ) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('intercept', 'baselineincidence', 'exposureriskratio', 'b_')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  # summarise statistics of interest
-  statistics_by_dosage <-
-    # evalutate parameters over levels of dosage
-    expand_grid(dosgy = 0:5, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_dosgy_m = rep(theta$b_dosgy, 6),
-      b_female_dosgy = rep(theta$b_female_dosgy, 6)
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer @ dosage compared to 0 dosage
-      dosageriskratio_m = exp(b_dosgy_m*dosgy),
-      dosageriskratio_f = exp((b_dosgy_m+b_female_dosgy)*dosgy)
-    ) |>
-    group_by(dosgy) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('dosageriskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  statistics_by_age <-
-    # evalutate parameters over age
-    expand_grid(age = 15:85, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_age1 = rep(theta$b_age1, 71),
-      b_age2 = rep(theta$b_age2, 71),
-      b_femaleage1 = rep(theta$b_femaleage1, 71),
-      b_femaleage2 = rep(theta$b_femaleage2, 71),
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer incidence over age
-      riskratio_m = exp(b_age1*(age-25) + b_age2*(age-25)^2),
-      riskratio_f = exp((b_age1+b_femaleage1)*(age-25) +
-                          (b_age2+b_femaleage2)*(age-25)^2)
-    ) |>
-    group_by(age) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('riskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-})
-
-summary(car2$fit)
-car2$statistics_overall |> t()
-car2$statistics_by_age
-car2$statistics_by_dosage
-car2$theta$nb_overdispersion
-car2$residual_tests
-
-car2$statistics_by_age |>
-  ggplot() +
-  aes(x = age) +
-  geom_ribbon(aes(ymin = riskratio_m_qlo, ymax = riskratio_m_qhi),
-              fill = 'blue', alpha = 0.1) +
-  geom_line(aes(y = riskratio_m_avg), color = 'blue') +
-  geom_ribbon(aes(ymin = riskratio_f_qlo, ymax = riskratio_f_qhi),
-              fill = 'red', alpha = 0.1) +
-  geom_line(aes(y = riskratio_f_avg), color = 'red')
+#image(nbcar$W)
+# total number of neighbors
+sum(spatialdat$W)
+# average number of neighbors per district
+sum(spatialdat$W)/nrow(spatialdat$W)
+# maximum number of neighbors per district
+max(rowSums(spatialdat$W))
+# number of districts with 0 neighbors
+sum(rowSums(spatialdat$W)==0)
 
 # NB --------------------------------------------------------------
 
-nb <- list()
+nb <- within(spatialdat, {
 
-# prepare data
-nb$data <-
-  dat$modelinput$region_sex_age |>
-  filter(sex != 'total') |>
-  mutate(
-    sex = factor(sex, levels = c('male', 'female')),
-    dosGy = dose/1000
-  )
-
-# NB1 (overall) ---------------------------------------------------
-
-nb1 <- within(list(), {
-  
+  set.seed(1986)
+    
   # dimensions
-  d <- list(nsim = cnst$nsim, ndat = nrow(car$data))
+  d <- list(nsim = cnst$nsim, ndat = nrow(data))
   
-  # fit nb-CAR model
-  fit <- inla(
-    incidence_2001 ~
-      1 + sex +
-      poly(ageminus25, 2, raw = TRUE) +
-      sex:poly(ageminus25, 2, raw = TRUE) +
-      dosGy +
-      offset(log(population_2001)),
-    data = car$data,
+  # SPECIFY MODEL
+  
+  likelihood <- bru_obs(
     family = 'nbinomial',
-    control.predictor = list(compute = TRUE),
-    control.compute = list(dic = TRUE, waic = TRUE, config = TRUE)
+    data = data,
+    formula =
+      incidence_2001 ~
+      intercept +
+      alpha_aae + alpha_aaesq +
+      alpha_sex +
+      log1p(err*exp(logerrmod_aae+logerrmod_sex)),
+    E = population_2001
   )
-  summary(fit)
+  fit <- bru(
+    components = ~
+      # thyroid cancer risk baseline
+      intercept(1) +
+      alpha_aae(ageatexposure, model = 'linear') +
+      alpha_aaesq(ageatexposuresq, model = 'linear') +
+      alpha_sex(sexsumto0, model = 'linear') +
+      # radiation exposure excess relative risk
+      err(dosGy, model = 'linear') +
+      logerrmod_aae(ageatexposure, model = 'linear') +
+      logerrmod_sex(sexsumto0, model = 'linear'),
+    likelihood,
+    options = list(
+      control.compute = list(dic = TRUE, waic = TRUE, cpo = FALSE),
+      control.inla = list(
+        int.strategy = 'eb'
+      ),
+      verbose = TRUE,
+      bru_verbose = 4
+    )
+  )
   
-  # extract simulations of model parameters
-  posterior_samples <- inla.posterior.sample(cnst$nsim, result = fit)
+  # SIMULATE FROM MODEL
+  
+  # err per gy
+  errpergy <- predict(
+    fit,
+    expand.grid(
+      sexsumto0 = unique(data$sexsumto0),
+      ageatexposure = unique(data$ageatexposure),
+      dosGy = 1
+    ),
+    ~ (err)*exp(logerrmod_aae+logerrmod_sex),
+    n.samples = d$nsim
+  )
+  
+  # coefficients of interest
+  coefs <- predict(
+    fit,
+    NULL,
+    ~ c(
+      # baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept = exp(intercept_latent)*1e6,
+      # female baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept_female = exp(intercept_latent + alpha_sex_latent/2)*1e6,
+      # male baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept_male = exp(intercept_latent - alpha_sex_latent/2)*1e6,
+      # ratio of female to male baseline thyroid cancer rates
+      alpha_sex = exp(alpha_sex_latent),
+      # linear coefficient of age at exposure effect on log baseline thyroid cancer rate
+      alpha_aae = alpha_aae_latent,
+      # quadratic coefficient of squared age at exposure effect on log baseline thyroid cancer rate
+      alpha_aaesq = alpha_aaesq_latent,
+      # excess relative risk per 1 Gy at age of exposure 0
+      err = err_latent,
+      # female excess relative risk per 1 Gy at age of exposure 0
+      err_female = err_latent*exp(logerrmod_sex_latent/2),
+      # male excess relative risk per 1 Gy at age of exposure 0
+      err_male = err_latent*exp(-logerrmod_sex_latent/2),
+      # ratio of male to female excess relative risk per 1 Gy at age of exposure 0
+      errmod_sex = exp(logerrmod_sex_latent),
+      # multiplicative change in err over 5 year increase in age at exposure
+      errmod_age = exp(logerrmod_aae_latent*5)
+    ),
+    n.samples = d$nsim
+  )
+  
+  # predictive samples
   theta <- within(list(), {
-    # beta's
-    b_intercept =
-      inla.posterior.sample.eval(c('Intercept'), posterior_samples)
-    b_female =
-      inla.posterior.sample.eval(c('sexfemale'), posterior_samples)
-    b_dosgy =
-      inla.posterior.sample.eval(c('dosGy'), posterior_samples)
-    b_age1 =
-      inla.posterior.sample.eval(c('1'), posterior_samples)
-    b_age2 =
-      inla.posterior.sample.eval(c('2'), posterior_samples)
-    b_femaleage1 =
-      inla.posterior.sample.eval(c('sexfemale:1'), posterior_samples)
-    b_femaleage2 =
-      inla.posterior.sample.eval(c('sexfemale:2'), posterior_samples)
     # predicted mean response
-    nb_mu =
-      exp(inla.posterior.sample.eval(c('Predictor'), posterior_samples))
+    nb_mu = generate(
+      fit, newdata = data, formula = ~exp(
+        intercept + alpha_aae + alpha_aaesq + alpha_sex +
+          log1p(err*exp(logerrmod_aae+logerrmod_sex))
+      )*population_2001,
+      n.samples = d$nsim
+    )
     # negative binominal parameters
-    nb_size =
-      fit$summary.hyperpar$mean[1]
-    nb_var =
-      nb_mu + nb_mu^2/nb_size
-    nb_overdispersion =
-      1/nb_size
-    nb_p =
-      nb_mu/nb_var
-    nb_r =
-      (nb_mu^2)/(nb_var-nb_mu)
+    nb_size = fit$summary.hyperpar[1,1]
+    nb_var = nb_mu + nb_mu^2/nb_size
+    nb_overdispersion = 1/nb_size
+    nb_p = nb_mu/nb_var
+    nb_r = (nb_mu^2)/(nb_var-nb_mu)
   })
   
-  # residual diagnostics
+  # baseline thyroid cancer risk by age and sex
+  baseline <- predict(
+    fit,
+    unique(data[,c('age', 'ageatexposure', 'ageatexposuresq', 'sexsumto0')]),
+    ~ exp(intercept + alpha_aae + alpha_aaesq + alpha_sex),
+    n.samples = d$nsim
+  )
+  
+  # err over levels of dosage and by sex, age at exposure
+  err <- predict(
+    fit,
+    expand_grid(
+      unique(data[,c('ageatexposure', 'sexsumto0')]),
+      data.frame(
+        dosGy = c(0.1, 0.2, 0.3, 0.4, 0.5, 1, 2)
+      )
+    ),
+    ~ (err)*exp(logerrmod_aae+logerrmod_sex),
+    n.samples = d$nsim
+  )
+  
+  # RESIDUAL DIAGNOSTICS
+  
   # simulated count responses
   simulated_counts <- matrix(NA, nrow = d$ndat, ncol = d$nsim)
   for (i in 1:d$ndat) {
     simulated_counts[i,] <-
       rnbinom(d$nsim, size = theta$nb_r[i,], prob = theta$nb_p[i,])
   }
+  simulated_counts <- simulated_counts[,!apply(simulated_counts, 2, anyNA)]
   # residual object
   dharm <- createDHARMa(
-    simulated_counts, car$data$incidence_2001,
+    simulated_counts, data$incidence_2001,
     fittedPredictedResponse = NULL, integerResponse = TRUE
   )
   # aggregate residuals to regions
-  dharm_agg <- recalculateResiduals(dharm, group = car$data$region_id)
+  dharm_agg <- recalculateResiduals(dharm, group = data$region_id)
   residual_tests <- list(
     test_dispersion = testDispersion(dharm),
     test_zeroinflation = testZeroInflation(dharm),
@@ -707,179 +428,186 @@ nb1 <- within(list(), {
       testSpatialAutocorrelation(dharm_agg, dat$locations$X, dat$locations$Y)
   )
   
-  # statistics of interest
-  statistics_overall <-
-    expand_grid(draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_intercept = theta$b_intercept,
-      b_female = theta$b_female,
-      b_age1 = theta$b_age1,
-      b_age2 = theta$b_age2,
-      b_femaleage1 = theta$b_femaleage1,
-      b_femaleage2 = theta$b_femaleage2,
-      b_dosgy_m = theta$b_dosgy
-    ) |>
-    mutate(
-      intercept_m = b_intercept,
-      intercept_f = b_intercept+b_female,
-      # annual thyroid cancer incidence per million @ 0 dosage age 25
-      baselineincidence_m = exp(intercept_m)*cnst$incidencescaler,
-      baselineincidence_f = exp(intercept_f)*cnst$incidencescaler,
-      # rate ratio of female to male baseline incidence
-      baselineincidence_femalefactor = exp(b_female),
-      # relative increase in thyroid cancer incidence for
-      # 1 Gy increase in dosage
-      exposureriskratio = exp(b_dosgy_m)
-    ) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('intercept', 'baselineincidence', 'exposureriskratio', 'b_')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  # summarise statistics of interest
-  statistics_by_dosage <-
-    # evalutate parameters over levels of dosage
-    expand_grid(dosgy = 0:5, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_dosgy_m = rep(theta$b_dosgy, 6),
-      b_female_dosgy = rep(theta$b_female_dosgy, 6)
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer @ dosage compared to 0 dosage
-      dosageriskratio = exp(b_dosgy_m*dosgy)
-    ) |>
-    group_by(dosgy) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('dosageriskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  statistics_by_age <-
-    # evalutate parameters over age
-    expand_grid(age = 15:85, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_age1 = rep(theta$b_age1, 71),
-      b_age2 = rep(theta$b_age2, 71),
-      b_femaleage1 = rep(theta$b_femaleage1, 71),
-      b_femaleage2 = rep(theta$b_femaleage2, 71),
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer incidence over age
-      riskratio_m = exp(b_age1*(age-25) + b_age2*(age-25)^2),
-      riskratio_f = exp((b_age1+b_femaleage1)*(age-25) +
-                          (b_age2+b_femaleage2)*(age-25)^2)
-    ) |>
-    group_by(age) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('riskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
 })
 
-summary(nb1$fit)
-nb1$statistics_overall |> t() |> formatC(digits = 2, format = 'f')
-nb1$statistics_by_age
-nb1$statistics_by_dosage
-nb1$theta$nb_overdispersion
-nb1$residual_tests
+nb$textsummary <-
+  list(
+    date = date(),
+    summary = summary(nb$fit),
+    coefficients = round(nb$coefs, 3),
+    overdispersion = nb$theta$nb_overdispersion,
+    tests = nb$residual_tests
+  )
 
-nb1$statistics_by_age |>
-  ggplot() +
-  aes(x = age) +
-  geom_ribbon(aes(ymin = riskratio_m_qlo, ymax = riskratio_m_qhi),
-              fill = 'blue', alpha = 0.1) +
-  geom_line(aes(y = riskratio_m_avg), color = 'blue') +
-  geom_ribbon(aes(ymin = riskratio_f_qlo, ymax = riskratio_f_qhi),
-              fill = 'red', alpha = 0.1) +
-  geom_line(aes(y = riskratio_f_avg), color = 'red')
+capture.output(
+  nb$textsummary, file = 'out/22-nb_textsummary.txt'
+)
 
-# NB2 (by sex) ----------------------------------------------------
+# NB-CAR ----------------------------------------------------------
 
-nb2 <- within(list(), {
+nbcar <- within(spatialdat, {
+  
+  set.seed(1986)
   
   # dimensions
-  d <- list(nsim = cnst$nsim, ndat = nrow(car$data))
+  d <- list(nsim = cnst$nsim, ndat = nrow(data))
   
-  # fit nb-CAR model
-  fit <- inla(
-    incidence_2001 ~
-      1 + sex +
-      poly(ageminus25, 2, raw = TRUE) +
-      sex:poly(ageminus25, 2, raw = TRUE) +
-      dosGy + sex:dosGy +
-      offset(log(population_2001)),
-    data = car$data,
+  # SPECIFY MODEL
+  
+  likelihood <- bru_obs(
     family = 'nbinomial',
-    control.predictor = list(compute = TRUE),
-    control.compute = list(dic = TRUE, waic = TRUE, config = TRUE)
+    data = data,
+    formula =
+      incidence_2001 ~
+      intercept +
+      alpha_aae + alpha_aaesq +
+      alpha_sex +
+      log1p(err*exp(logerrmod_aae+logerrmod_sex)) +
+      zeta,
+    E = population_2001
   )
-  summary(fit)
+  fit <- bru(
+    components = ~
+      # thyroid cancer risk baseline
+      intercept(1) +
+      alpha_aae(ageatexposure, model = 'linear') +
+      alpha_aaesq(ageatexposuresq, model = 'linear') +
+      alpha_sex(sexsumto0, model = 'linear') +
+      # radiation exposure excess relative risk
+      err(dosGy, model = 'linear') +
+      logerrmod_aae(ageatexposure, model = 'linear') +
+      logerrmod_sex(sexsumto0, model = 'linear') +
+      # region control
+      zeta(region_id, model = 'besag', graph = W),
+    likelihood,
+    options = list(
+      control.compute = list(dic = TRUE, waic = TRUE, cpo = FALSE),
+      control.inla = list(
+        int.strategy = 'eb'
+      ),
+      verbose = TRUE,
+      bru_verbose = 4
+    )
+  )
   
-  # extract simulations of model parameters
-  posterior_samples <- inla.posterior.sample(cnst$nsim, result = fit)
+  # SIMULATE FROM MODEL
+  
+  # err per gy by age and sex
+  errpergybyagesex <- predict(
+    fit,
+    expand.grid(
+      sexsumto0 = unique(data$sexsumto0),
+      ageatexposure = unique(data$ageatexposure),
+      dosGy = 1
+    ),
+    ~ err*exp(logerrmod_aae+logerrmod_sex),
+    n.samples = d$nsim
+  )
+  
+  # err per gy by age
+  errpergyage <- predict(
+    fit,
+    expand.grid(
+      ageatexposure = unique(data$ageatexposure),
+      dosGy = 1
+    ),
+    ~ err*exp(logerrmod_aae),
+    n.samples = d$nsim
+  )
+  
+  # coefficients of interest
+  coefs <- predict(
+    fit,
+    NULL,
+    ~ c(
+      # baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept = exp(intercept_latent)*1e6,
+      # female baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept_female = exp(intercept_latent + alpha_sex_latent/2)*1e6,
+      # male baseline thyroid cancer rate at age of exposure 0 per million PY
+      intercept_male = exp(intercept_latent - alpha_sex_latent/2)*1e6,
+      # ratio of female to male baseline thyroid cancer rates
+      alpha_sex = exp(alpha_sex_latent),
+      # linear coefficient of age at exposure effect on log baseline thyroid cancer rate
+      alpha_aae = alpha_aae_latent,
+      # quadratic coefficient of squared age at exposure effect on log baseline thyroid cancer rate
+      alpha_aaesq = alpha_aaesq_latent,
+      # excess relative risk per 1 Gy at age of exposure 0
+      err = err_latent,
+      # female excess relative risk per 1 Gy at age of exposure 0
+      err_female = err_latent*exp(logerrmod_sex_latent/2),
+      # male excess relative risk per 1 Gy at age of exposure 0
+      err_male = err_latent*exp(-logerrmod_sex_latent/2),
+      # ratio of male to female excess relative risk per 1 Gy at age of exposure 0
+      errmod_sex = exp(logerrmod_sex_latent),
+      # multiplicative change in err over 5 year increase in age at exposure
+      errmod_age = exp(logerrmod_aae_latent*5)
+    ),
+    n.samples = d$nsim
+  )
+  
+  # predictive samples
   theta <- within(list(), {
-    # beta's
-    b_intercept =
-      inla.posterior.sample.eval(c('Intercept'), posterior_samples)
-    b_female =
-      inla.posterior.sample.eval(c('sexfemale'), posterior_samples)
-    b_dosgy =
-      inla.posterior.sample.eval(c('dosGy'), posterior_samples)
-    b_female_dosgy =
-      inla.posterior.sample.eval(c('sexfemale:dosGy'), posterior_samples)
-    b_age1 =
-      inla.posterior.sample.eval(c('1'), posterior_samples)
-    b_age2 =
-      inla.posterior.sample.eval(c('2'), posterior_samples)
-    b_femaleage1 =
-      inla.posterior.sample.eval(c('sexfemale:1'), posterior_samples)
-    b_femaleage2 =
-      inla.posterior.sample.eval(c('sexfemale:2'), posterior_samples)
     # predicted mean response
-    nb_mu =
-      exp(inla.posterior.sample.eval(c('Predictor'), posterior_samples))
+    nb_mu = generate(
+      fit, newdata = data, formula = ~exp(
+        intercept + alpha_aae + alpha_aaesq + alpha_sex +
+          log1p(err*exp(logerrmod_aae+logerrmod_sex)) + zeta)*population_2001,
+      n.samples = d$nsim
+    )
     # negative binominal parameters
-    nb_size =
-      fit$summary.hyperpar$mean[1]
-    nb_var =
-      nb_mu + nb_mu^2/nb_size
-    nb_overdispersion =
-      1/nb_size
-    nb_p =
-      nb_mu/nb_var
-    nb_r =
-      (nb_mu^2)/(nb_var-nb_mu)
+    nb_size = fit$summary.hyperpar[1,1]
+    nb_var = nb_mu + nb_mu^2/nb_size
+    nb_overdispersion = 1/nb_size
+    nb_p = nb_mu/nb_var
+    nb_r = (nb_mu^2)/(nb_var-nb_mu)
   })
   
-  # residual diagnostics
+  # baseline thyroid cancer risk by age and sex
+  baseline <- predict(
+    fit,
+    unique(data[,c('age', 'ageatexposure', 'ageatexposuresq', 'sexsumto0')]),
+    ~ exp(intercept + alpha_aae + alpha_aaesq + alpha_sex),
+    n.samples = d$nsim
+  )
+  
+  # err over levels of dosage and by sex, age at exposure
+  err <- predict(
+    fit,
+    expand_grid(
+      unique(data[,c('ageatexposure', 'sexsumto0')]),
+      data.frame(
+        dosGy = c(0.1, 0.2, 0.3, 0.4, 0.5, 1, 2)
+      )
+    ),
+    ~ err*exp(logerrmod_aae+logerrmod_sex),
+    n.samples = d$nsim
+  )
+  
+  # region effects
+  zeta <- predict(
+    fit,
+    unique(data[,c('region_id', 'region_id_orig')]),
+    ~ exp(zeta),
+    n.samples = d$nsim
+  )
+  
+  # RESIDUAL DIAGNOSTICS
+  
   # simulated count responses
   simulated_counts <- matrix(NA, nrow = d$ndat, ncol = d$nsim)
   for (i in 1:d$ndat) {
     simulated_counts[i,] <-
       rnbinom(d$nsim, size = theta$nb_r[i,], prob = theta$nb_p[i,])
   }
+  simulated_counts <- simulated_counts[,!apply(simulated_counts, 2, anyNA)]
   # residual object
   dharm <- createDHARMa(
-    simulated_counts, car$data$incidence_2001,
+    simulated_counts, data$incidence_2001,
     fittedPredictedResponse = NULL, integerResponse = TRUE
   )
   # aggregate residuals to regions
-  dharm_agg <- recalculateResiduals(dharm, group = car$data$region_id)
+  dharm_agg <- recalculateResiduals(dharm, group = data$region_id)
   residual_tests <- list(
     test_dispersion = testDispersion(dharm),
     test_zeroinflation = testZeroInflation(dharm),
@@ -887,188 +615,154 @@ nb2 <- within(list(), {
       testSpatialAutocorrelation(dharm_agg, dat$locations$X, dat$locations$Y)
   )
   
-  # statistics of interest
-  statistics_overall <-
-    expand_grid(draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_intercept = theta$b_intercept,
-      b_female = theta$b_female,
-      b_age1 = theta$b_age1,
-      b_age2 = theta$b_age2,
-      b_femaleage1 = theta$b_femaleage1,
-      b_femaleage2 = theta$b_femaleage2,
-      b_dosgy_m = theta$b_dosgy,
-      b_female_dosgy = theta$b_female_dosgy
-    ) |>
-    mutate(
-      intercept_m = b_intercept,
-      intercept_f = b_intercept+b_female,
-      # annual thyroid cancer incidence per million @ 0 dosage age 25
-      baselineincidence_m = exp(intercept_m)*cnst$incidencescaler,
-      baselineincidence_f = exp(intercept_f)*cnst$incidencescaler,
-      # rate ratio of female to male baseline incidence
-      baselineincidence_femalefactor = exp(b_female),
-      # relative increase in thyroid cancer incidence for
-      # 1 Gy increase in dosage
-      exposureriskratio_m = exp(b_dosgy_m),
-      exposureriskratio_f = exp(b_dosgy_m+b_female_dosgy),
-      # rate ratio of female to male exposure risk ratio
-      exposureriskratio_femalefactor = exp(b_female_dosgy),
-    ) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('intercept', 'baselineincidence', 'exposureriskratio', 'b_')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  # summarise statistics of interest
-  statistics_by_dosage <-
-    # evalutate parameters over levels of dosage
-    expand_grid(dosgy = 0:5, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_dosgy_m = rep(theta$b_dosgy, 6),
-      b_female_dosgy = rep(theta$b_female_dosgy, 6)
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer @ dosage compared to 0 dosage
-      dosageriskratio_m = exp(b_dosgy_m*dosgy),
-      dosageriskratio_f = exp((b_dosgy_m+b_female_dosgy)*dosgy)
-    ) |>
-    group_by(dosgy) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('dosageriskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
-  statistics_by_age <-
-    # evalutate parameters over age
-    expand_grid(age = 15:85, draw = 1:d$nsim) |>
-    # expand beta's of interest
-    mutate(
-      b_age1 = rep(theta$b_age1, 71),
-      b_age2 = rep(theta$b_age2, 71),
-      b_femaleage1 = rep(theta$b_femaleage1, 71),
-      b_femaleage2 = rep(theta$b_femaleage2, 71),
-    ) |>
-    # derive measure of interest
-    mutate(
-      # risk ratio of thyroid cancer incidence over age
-      riskratio_m = exp(b_age1*(age-25) + b_age2*(age-25)^2),
-      riskratio_f = exp((b_age1+b_femaleage1)*(age-25) +
-                          (b_age2+b_femaleage2)*(age-25)^2)
-    ) |>
-    group_by(age) |>
-    # summarize mean + quantiles
-    summarise(across(
-      starts_with(c('riskratio')),
-      list(avg = mean, qlo = ~quantile(.x, cnst$cilo),
-           qhi = ~quantile(.x, cnst$cihi))
-    )) |>
-    ungroup()
-  
 })
 
-summary(nb2$fit)
-nb2$statistics_overall |> t() |> formatC(digits = 2, format = 'f')
-nb2$statistics_by_age
-nb2$statistics_by_dosage
-nb2$theta$nb_overdispersion
-nb2$residual_tests
+nbcar$textsummary <-
+  list(
+    date = date(),
+    summary = summary(nbcar$fit),
+    coefficients = round(nbcar$coefs, 3),
+    overdispersion = nbcar$theta$nb_overdispersion,
+    tests = nbcar$residual_tests
+  )
 
-nb2$statistics_by_age |>
+capture.output(
+  nbcar$textsummary, file = 'out/22-nbcar_textsummary.txt'
+)
+
+# Plot baseline ---------------------------------------------------
+
+nbcar$plot <- list()
+
+# baseline risk ratio over age by sex
+nbcar$plot$baseline <-
+  nbcar$baseline |>
+  mutate(sex = ifelse(sexsumto0 == -0.5, 'Male', 'Female')) |>
   ggplot() +
-  aes(x = age) +
-  geom_ribbon(aes(ymin = riskratio_m_qlo, ymax = riskratio_m_qhi),
-              fill = 'blue', alpha = 0.1) +
-  geom_line(aes(y = riskratio_m_avg), color = 'blue') +
-  geom_ribbon(aes(ymin = riskratio_f_qlo, ymax = riskratio_f_qhi),
-              fill = 'red', alpha = 0.1) +
-  geom_line(aes(y = riskratio_f_avg), color = 'red')
+  aes(x = ageatexposure) +
+  geom_ribbon(aes(ymin = q0.025, ymax = q0.975, fill = sex), alpha = 0.1) +
+  geom_line(aes(y = mean, color = sex)) +
+  geom_point(aes(y = mean, color = sex)) +
+  scale_y_continuous(labels = scales::label_comma(scale = 1e6), expand = c(0,0),
+                     breaks = seq(0, 100, 10)/1e6) +
+  scale_x_continuous(
+    breaks = unique(nbcar$data$ageatexposure),
+    labels = c(
+      '0-4', '5-9', '10-14', '15-19', '20-24', '25-29', '30-34', '35-39',
+      '40-44', '45-49', '50-54', '55-59', '60-64', '65-69', '70-74'
+    )
+  ) +
+  labs(x = 'Age group', y = 'Baseline thyroid cancer incidence per million person-years') +
+  MyGGplotTheme()
 
-# Plot dosage-risk-ratio ------------------------------------------
+nbcar$plot$baseline
 
-car2$dosageriskratio <-
-  car2$statistics_by_dosage |>
-  ggplot(aes(x = dosgy)) +
-  geom_hline(yintercept = 1, color = 'black') +
-  geom_ribbon(
-    aes(
-      ymin = dosageriskratio_qlo,
-      ymax = dosageriskratio_qhi
-    ),
-    fill = NA, alpha = 0.1, color = 'black',
-    lty = 2,
-    data = car1$statistics_by_dosage
-  ) +
-  geom_ribbon(
-    aes(
-      ymin = dosageriskratio_m_qlo,
-      ymax = dosageriskratio_m_qhi
-    ),
-    color = '#4295f5', alpha = 0.1, fill = NA,
-    lty = 2
-  ) +
-  geom_ribbon(
-    aes(
-      ymin = dosageriskratio_f_qlo,
-      ymax = dosageriskratio_f_qhi
-    ),
-    color = '#f5425a', alpha = 0.1, fill = NA,
-    lty = 2
-  ) +
-  geom_line(
-    aes(y = dosageriskratio_avg),
-    color = 'black', size = 1,
-    data = car1$statistics_by_dosage
-  ) +
-  geom_line(
-    aes(y = dosageriskratio_m_avg),
-    color = '#4295f5', size = 1
-  ) +
-  geom_line(
-    aes(y = dosageriskratio_f_avg),
-    color = '#f5425a', size = 1
-  ) +
-  scale_y_continuous(
-    trans = 'log',
-    breaks = c(0.1, 0.5, unlist(map(c(1,10, 100, 1000),
-                                    ~c(1,2,3,4,5)*.x))),
-  ) +
-  labs(x = 'District population average absorbed thyroid dose in 1986 [Gy]', y = 'Exposure risk ratio') +
-  coord_cartesian(xlim = c(0, 1.5), ylim = c(0.5, 10),
-                  expand = FALSE) +
-  MyGGplotTheme(axis = 'y', grid = 'xy')
-car2$dosageriskratio
+# Plot ERR --------------------------------------------------------
 
-dat$modelinput$region_sex |>
+nbcar$plot$errpergybyagesex <-
+  nbcar$errpergybyagesex |>
+  mutate(sex = ifelse(sexsumto0 == -0.5, 'Male', 'Female')) |>
   ggplot() +
-  geom_histogram(
-    aes(x = average_dose/1e3, weight = population_2001),
-    breaks = c(0, 0.02, 0.04, 0.08, 0.1, 0.2, 0.5, 2)
+  aes(x = ageatexposure, y = median, color = sex, fill = sex, group = sex) +
+  geom_errorbar(aes(ymax = q0.975, ymin = q0.025),
+                position = position_dodge(width = 3), alpha = 0.5) +
+  geom_point(position = position_dodge(width = 3)) +
+  scale_x_continuous(breaks = unique(nbcar$data$ageatexposure), labels = c(
+    '0-4', '5-9', '10-14', '15-19', '20-24', '25-29', '30-34', '35-39',
+    '40-44', '45-49', '50-54', '55-59', '60-64', '65-69', '70-74'
+  )) +
+  scale_y_continuous(breaks = seq(0, 50, 10), expand = c(0.005, 0.005)) +
+  labs(y = 'Excess relative risk per Gy', x = 'Age at exposure') +
+  MyGGplotTheme()
+
+nbcar$plot$errpergybyagesex
+
+# Plot spatial estimates ------------------------------------------
+
+zeta <- left_join(dat$maptemplates$ukrgeo, nbcar$zeta,
+                  by = c(region_id = 'region_id_orig'))
+
+nbcar$plot$zeta <-
+  zeta |>
+  ggplot() +
+  geom_sf(data = dat$maptemplates$background) +
+  geom_sf(aes(fill = mean),
+          linewidth = config$figspec$district_outline_width) +
+  geom_sf(data = dat$maptemplates$outline, fill = NA,
+          linewidth = config$figspec$national_outline_width) +
+  geom_sf(
+    data = dat$maptemplates$cities,
+    size = config$figspec$cities_point_size, shape = 1
   ) +
-  coord_cartesian(xlim = c(0, 1.5),
-                  expand = FALSE) +
-  #scale_y_log10() +
-  MyGGplotTheme(axis = 'xy', grid = 'xy')
+  geom_sf_text(
+    data = dat$maptemplates$cities,
+    aes(label = city),
+    family = 'roboto',
+    size = config$figspec$cities_text_size,
+    hjust = 0, vjust = 0,  position = position_nudge(0.21, -0.21),
+    color = 'white'
+  ) +
+  geom_sf_text(
+    data = dat$maptemplates$cities,
+    aes(label = city),
+    family = 'roboto',
+    size = config$figspec$cities_text_size,
+    hjust = 0, vjust = 0, position = position_nudge(0.20, -0.20)
+  ) +
+  scale_x_continuous(breaks = NULL) +
+  scale_y_continuous(breaks = NULL) +
+  scale_fill_distiller(type = 'div', trans = 'log10',
+                       na.value = config$figspec$na_color,
+                       limits = c(1/3, 3),
+                       oob = scales::squish,
+                       breaks = c(1/3, 0.5, 1, 2, 3),
+                       labels = c('<1/3', '1/2', '1', '2/1', '>3/1')
+  ) +
+  labs(
+    fill = 'ICAR spatial effect',
+    y = NULL,
+    x = NULL
+  ) +
+  coord_sf(expand = FALSE) +
+  MyGGplotTheme(axis = '', axis_ticks = '', panel_border = TRUE) +
+  theme(axis.text = element_blank())
+
+nbcar$plot$zeta
 
 # Export ----------------------------------------------------------
 
 saveRDS(dosage, paths$output$dosage_rds)
-saveRDS(car1, paths$output$car1_rds)
-saveRDS(car2, paths$output$car2_rds)
-saveRDS(nb1, paths$output$nb1_rds)
-saveRDS(nb2, paths$output$nb2_rds)
+saveRDS(nb, paths$output$nb_rds)
+saveRDS(nbcar, paths$output$nbcar_rds)
+
+nbcar$errpergyage |>
+  dplyr::select(ageatexposure, mean, sd, q0.025, q0.5, q0.975) |>
+  mutate(across(where('is.numeric'), ~round(.x, 3))) |>
+  write.csv(paths$output$nbcar_errpergybyage_csv, row.names = FALSE)
+
+nbcar$errpergybyagesex |>
+  mutate(sex = ifelse(sexsumto0 == -0.5, 'Male', 'Female')) |>
+  dplyr::select(sex, ageatexposure, mean, sd, q0.025, q0.5, q0.975) |>
+  mutate(across(where('is.numeric'), ~round(.x, 3))) |>
+  write.csv(paths$output$nbcar_errpergybyagesex_csv, row.names = FALSE)
 
 ExportFigure(
-  car2$dosageriskratio, path = paths$output$out, filename = '22-car2dosageriskratio',
+  nbcar$plot$baseline,
+  path = paths$output$out, filename = '22-nbcar_baseline',
+  device = 'pdf',
+  width = config$figspec$width, scale = 1.2
+)
+
+ExportFigure(
+  nbcar$plot$errpergybyagesex,
+  path = paths$output$out, filename = '22-nbcar_errpergybyagesex',
+  device = 'pdf',
+  width = config$figspec$width, scale = 1.2
+)
+
+ExportFigure(
+  nbcar$plot$zeta,
+  path = paths$output$out, filename = '22-nbcar_zeta',
   device = 'pdf',
   width = config$figspec$width, scale = 1.2
 )
