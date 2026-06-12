@@ -24,6 +24,7 @@ paths$input <- list(
 )
 paths$output <- list(
   smoothsir_rds = 'out/21-smoothsir.rds',
+  smoothsir_csv = 'out/21-smoothsir.csv',
   out = 'out/'
 )
 
@@ -171,6 +172,66 @@ map(c('female', 'male', 'total'), ~{
 })
 smoothsir$plot$total
 
+# Plot smooth SIR w/o significance cutoff -------------------------
+
+smoothsirfull <- list()
+
+smoothsirfull$data <-
+  dat$predicted_sir |>
+  unnest(predictions) |>
+  left_join(dat$maptemplates$ukrgeo) |>
+  st_as_sf()
+
+smoothsirfull$plot <- list()
+map(c('female', 'male', 'total'), ~{
+  smoothsirfull$plot[[.x]] <<-
+    smoothsirfull$data |>
+    filter(sex == .x) |>
+    ggplot() +
+    geom_sf(data = dat$maptemplates$background) +
+    geom_sf(aes(fill = sir_smooth_est),
+            linewidth = config$figspec$district_outline_width) +
+    geom_sf(data = dat$maptemplates$outline, fill = NA,
+            linewidth = config$figspec$national_outline_width) +
+    geom_sf(
+      data = dat$maptemplates$cities,
+      size = config$figspec$cities_point_size, shape = 1
+    ) +
+    geom_sf_text(
+      data = dat$maptemplates$cities,
+      aes(label = city),
+      family = 'roboto',
+      size = config$figspec$cities_text_size,
+      hjust = 0, vjust = 0,  position = position_nudge(0.21, -0.21),
+      color = 'white'
+    ) +
+    geom_sf_text(
+      data = dat$maptemplates$cities,
+      aes(label = city),
+      family = 'roboto',
+      size = config$figspec$cities_text_size,
+      hjust = 0, vjust = 0, position = position_nudge(0.20, -0.20)
+    ) +
+    scale_x_continuous(breaks = NULL) +
+    scale_y_continuous(breaks = NULL) +
+    scale_fill_distiller(type = 'div', trans = 'log10',
+                         na.value = config$figspec$na_color,
+                         limits = c(1/3, 3),
+                         oob = scales::squish,
+                         breaks = c(1/3, 0.5, 1, 2, 3),
+                         labels = c('<1/3', '1/2', '1', '2/1', '>3/1')
+    ) +
+    labs(
+      fill = 'SIR',
+      y = NULL,
+      x = NULL
+    ) +
+    coord_sf(expand = FALSE) +
+    MyGGplotTheme(axis = '', axis_ticks = '', panel_border = TRUE) +
+    theme(axis.text = element_blank())
+})
+smoothsirfull$plot$total
+
 # Export ----------------------------------------------------------
 
 saveRDS(smoothsir, paths$output$smoothsir_rds)
@@ -192,6 +253,13 @@ ExportFigure(
 ExportFigure(
   smoothsir$plot$male, path = paths$output$out,
   filename = '21-smoothsir_male',
+  device = 'svg',
+  width = config$figspec$width, scale = 1
+)
+
+ExportFigure(
+  smoothsirfull$plot$total, path = paths$output$out,
+  filename = '21-smoothsirfull_total',
   device = 'svg',
   width = config$figspec$width, scale = 1
 )
