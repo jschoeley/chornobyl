@@ -236,6 +236,14 @@ smoothsirfull$plot$total
 
 saveRDS(smoothsir, paths$output$smoothsir_rds)
 
+write_csv(
+  smoothsir$data |>
+    select(sex, region_id, incidence_expected, incidence_observed,
+           average_dose, population_2001, sir_smooth_est, sir_smooth_sig) |>
+    st_drop_geometry(),
+  paths$output$smoothsir_csv
+)
+
 ExportFigure(
   smoothsir$plot$total, path = paths$output$out,
   filename = '21-smoothsir_total',

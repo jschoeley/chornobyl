@@ -20,6 +20,7 @@ paths$input <- list(
 )
 paths$output <- list(
   crudesir_rds = 'out/20-crudesir.rds',
+  crudesir_csv = 'out/20-crudesir.csv',
   out = 'out'
 )
 
@@ -130,6 +131,13 @@ crudesir$plot$total
 # Export ----------------------------------------------------------
 
 saveRDS(crudesir, paths$output$crudesir_rds)
+
+write_csv(
+  crudesir$data |>
+    select(sex, region_id, incidence_expected, incidence_observed, sir_crude_est) |>
+    st_drop_geometry(),
+  paths$output$crudesir_csv
+)
 
 ExportFigure(
   crudesir$plot$total, path = paths$output$out,
