@@ -2,5 +2,7 @@
 *
 # Except these items
 !.gitignore
-22-nb_textsummary.txt
-22-nbcar_textsummary.txt
+!22-nb_textsummary.txt
+!22-nbcar_textsummary.txt
+!22-errpergybyage.csv
+!22-errpergybyagesex.csv

@@ -1,0 +1,113 @@
+$date
+[1] "Tue Oct 14 13:22:31 2025"
+
+$summary
+inlabru version: 2.12.0
+INLA version: 24.12.11
+Components:
+intercept: main = linear(1), group = exchangeable(1L), replicate = iid(1L), NULL
+alpha_aae: main = linear(ageatexposure), group = exchangeable(1L), replicate = iid(1L), NULL
+alpha_aaesq: main = linear(ageatexposuresq), group = exchangeable(1L), replicate = iid(1L), NULL
+alpha_sex: main = linear(sexsumto0), group = exchangeable(1L), replicate = iid(1L), NULL
+err: main = linear(dosGy), group = exchangeable(1L), replicate = iid(1L), NULL
+logerrmod_aae: main = linear(ageatexposure), group = exchangeable(1L), replicate = iid(1L), NULL
+logerrmod_sex: main = linear(sexsumto0), group = exchangeable(1L), replicate = iid(1L), NULL
+Likelihoods:
+  Family: 'nbinomial'
+    Tag: ''
+    Data class: 'tbl_df', 'tbl', 'data.frame'
+    Response class: 'numeric'
+    Predictor: 
+        incidence_2001 ~ intercept + alpha_aae + alpha_aaesq + alpha_sex + 
+            log1p(err * exp(logerrmod_aae + logerrmod_sex))
+    Used components: effects[intercept, alpha_aae, alpha_aaesq, alpha_sex, err, logerrmod_aae, logerrmod_sex], latent[]
+Time used:
+    Pre = 0.238, Running = 0.646, Post = 0.106, Total = 0.99 
+Fixed effects:
+                 mean     sd 0.025quant 0.5quant 0.975quant    mode kld
+intercept     -12.856  0.257    -13.360  -12.856    -12.351 -12.856   0
+alpha_aae       0.145  0.012      0.121    0.145      0.169   0.145   0
+alpha_aaesq    -0.002  0.000     -0.002   -0.002     -0.002  -0.002   0
+alpha_sex       1.156  0.102      0.956    1.156      1.355   1.156   0
+err            47.899 15.730     17.069   47.899     78.729  47.899   0
+logerrmod_aae  -0.047  0.010     -0.067   -0.047     -0.027  -0.047   0
+logerrmod_sex   0.422  0.271     -0.110    0.422      0.953   0.422   0
+
+Model hyperparameters:
+                                                       mean    sd 0.025quant 0.5quant
+size for the nbinomial observations (1/overdispersion) 2.21 0.316       1.66     2.18
+                                                       0.975quant mode
+size for the nbinomial observations (1/overdispersion)       2.91 2.13
+
+Deviance Information Criterion (DIC) ...............: 9630.90
+Deviance Information Criterion (DIC, saturated) ....: -81694270.14
+Effective number of parameters .....................: 6.75
+
+Watanabe-Akaike information criterion (WAIC) ...: 9630.95
+Effective number of parameters .................: 6.77
+
+Marginal log-Likelihood:  -4865.31 
+ is computed 
+Posterior summaries for the linear predictor and the fitted values are computed
+(Posterior marginals needs also 'control.compute=list(return.marginals.predictor=TRUE)')
+
+
+$coefficients
+                   mean     sd q0.025   q0.5 q0.975 median sd.mc_std_err
+intercept         2.700  0.709  1.587  2.604  4.345  2.604         0.006
+intercept_female  4.808  1.264  2.807  4.652  7.786  4.652         0.011
+intercept_male    1.521  0.415  0.872  1.461  2.485  1.461         0.004
+alpha_sex         3.186  0.327  2.598  3.175  3.875  3.175         0.002
+alpha_aae         0.145  0.012  0.121  0.145  0.170  0.145         0.000
+alpha_aaesq      -0.002  0.000 -0.002 -0.002 -0.002 -0.002         0.000
+err              47.970 15.894 17.053 48.087 79.111 48.087         0.110
+err_female       59.177 19.565 21.945 58.763 98.545 58.763         0.143
+err_male         39.612 15.406 12.596 38.483 72.456 38.483         0.115
+errmod_sex        1.588  0.442  0.903  1.530  2.601  1.530         0.004
+errmod_age        0.793  0.041  0.717  0.791  0.876  0.791         0.000
+                 mean.mc_std_err
+intercept                  0.007
+intercept_female           0.013
+intercept_male             0.004
+alpha_sex                  0.003
+alpha_aae                  0.000
+alpha_aaesq                0.000
+err                        0.161
+err_female                 0.199
+err_male                   0.156
+errmod_sex                 0.004
+errmod_age                 0.000
+
+$overdispersion
+[1] 0.4523605
+
+$tests
+$tests$test_dispersion
+
+	DHARMa nonparametric dispersion test via sd of residuals fitted vs. simulated
+
+data:  simulationOutput
+dispersion = 2.0205, p-value = 0.004203
+alternative hypothesis: two.sided
+
+
+$tests$test_zeroinflation
+
+	DHARMa zero-inflation test via comparison to expected zeros with simulation
+	under H0 = fitted model
+
+data:  simulationOutput
+ratioObsSim = 1.0028, p-value = 0.3381
+alternative hypothesis: two.sided
+
+
+$tests$test_spatialautocor
+
+	DHARMa Moran's I test for distance-based autocorrelation
+
+data:  dharm_agg
+observed = 0.0469856, expected = -0.0016026, sd = 0.0037074, p-value < 2.2e-16
+alternative hypothesis: Distance-based autocorrelation
+
+
+
