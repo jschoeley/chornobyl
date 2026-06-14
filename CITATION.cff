@@ -9,6 +9,7 @@ authors:
   given-names: Laura Ann
 - family-names: Jasilionis
   given-names: Domantas
-title: Analysis code for "Tracing echoes from the past: a district-level analysis of thyroid cancer incidence and radiation exposure in the post-Chornobyl Ukraine"
+title: |
+  Analysis code for "Tracing echoes from the past: a district-level analysis of thyroid cancer incidence and radiation exposure in the post-Chornobyl Ukraine"
 version: v1.1.1
 date-released: 2026-06-14
