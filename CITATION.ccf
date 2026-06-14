@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Levchuk
+  given-names: Nataliia
+- family-names: Schöley 
+  given-names: Jonas
+- family-names: Cilek
+  given-names: Laura Ann
+- family-names: Jasilionis
+  given-names: Domantas
+title: Analysis code for "Tracing echoes from the past: a district-level analysis of thyroid cancer incidence and radiation exposure in the post-Chornobyl Ukraine"
+version: v1.1.1
+date-released: 2026-06-14
